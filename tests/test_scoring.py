@@ -1,9 +1,11 @@
 from fantasy_draft_analyst.models import DraftContext
 from fantasy_draft_analyst.scoring import (
     component_scores,
+    draft_strategy_modifiers,
     estimate_player_points,
     market_ppg_prior,
     normalize_adp,
+    roster_strategy_summary,
     score_candidates,
     weighted_preseason_score,
     survival_probability,
@@ -165,3 +167,55 @@ def test_top_wr_te_components_are_not_flat():
         rows.append(component_scores(player, position, rank, points, fpg, points - volatility / 2, points + volatility / 2, 0.08, 0.7, 0.65, 0.55, 0.2))
     assert len({round(row["role"], 2) for row in rows}) > 1
     assert len({round(row["team_environment"], 2) for row in rows}) > 1
+
+
+def test_strategy_waits_on_qb_in_early_one_qb_ppr():
+    ctx = DraftContext(draft=sample_draft(), picks=sample_picks(), players=sample_players(), my_slot=2)
+    modifiers, factors = draft_strategy_modifiers(
+        ctx,
+        "QB",
+        adp=18,
+        vbd=80,
+        scarcity=0.2,
+        survival=0.8,
+        roster_fit=1.0,
+    )
+    assert modifiers["strategy_wait_on_qb"] < 0
+    assert any("waits on QB" in factor for factor in factors)
+
+
+def test_strategy_boosts_early_rb_wr_anchor_core():
+    ctx = DraftContext(draft=sample_draft(), picks=sample_picks(), players=sample_players(), my_slot=2)
+    modifiers, factors = draft_strategy_modifiers(
+        ctx,
+        "WR",
+        adp=20,
+        vbd=70,
+        scarcity=0.5,
+        survival=0.1,
+        roster_fit=1.0,
+    )
+    assert modifiers["strategy_anchor_core"] > 0
+    assert any("RB/WR anchors" in factor for factor in factors)
+
+
+def test_strategy_blocks_kicker_before_final_rounds():
+    ctx = DraftContext(draft=sample_draft(), picks=sample_picks(), players=sample_players(), my_slot=2)
+    modifiers, factors = draft_strategy_modifiers(
+        ctx,
+        "K",
+        adp=175,
+        vbd=0,
+        scarcity=0.1,
+        survival=0.95,
+        roster_fit=0.25,
+    )
+    assert modifiers["strategy_stream_k_def_late"] < -20
+    assert any("draft them last" in factor for factor in factors)
+
+
+def test_reasoning_strategy_summary_exposes_live_rules():
+    ctx = DraftContext(draft=sample_draft(), picks=sample_picks(), players=sample_players(), my_slot=2)
+    summary = roster_strategy_summary(ctx)
+    assert summary["format"] == "4-team 1-QB PPR redraft strategy"
+    assert "Use ADP as market price, not as the ranking." in summary["rules"]

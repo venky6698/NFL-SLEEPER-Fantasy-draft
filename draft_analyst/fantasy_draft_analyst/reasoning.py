@@ -7,6 +7,7 @@ from typing import Any
 from .config import Settings
 from .http_json import HttpError, request_json, url_join
 from .models import Candidate, DraftContext
+from .scoring import roster_strategy_summary
 
 
 SYSTEM_PROMPT = """You are an elite fantasy football draft analyst.
@@ -16,6 +17,9 @@ Prefer explainable, risk-aware recommendations over name value.
 This is a live timed draft. Recommend only from the supplied candidates list.
 Never recommend a player whose id appears in drafted_player_ids.
 Treat sync_age_seconds and last_pick as critical context; stale or drafted players are invalid.
+Follow the supplied 1-QB PPR redraft strategy when present: ADP is market price, not the ranking;
+draft from value over replacement, tier-drop urgency, survival risk, roster fit, and ADP value.
+Do not chase QB/TE runs in 1-QB unless an elite tier value falls. Draft K/DST only in final rounds.
 """
 
 
@@ -40,6 +44,7 @@ def build_reasoning_payload(ctx: DraftContext, candidates: list[Candidate]) -> d
             "last_pick": ctx.sync_metadata.get("last_pick") or ctx.last_pick,
             "time_pressure": "live draft; answer should be decisive and avoid slow speculative branches",
         },
+        "draft_strategy": roster_strategy_summary(ctx),
         "recent_picks": ctx.picks[-24:],
         "my_roster_counts": dict(__import__("collections").Counter(
             (pick.get("metadata") or {}).get("position")

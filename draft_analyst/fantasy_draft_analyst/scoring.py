@@ -93,6 +93,10 @@ def estimate_next_pick_after_current(current_pick: int, teams: int, slot: int) -
     return pick_number_for_slot(first + 1, teams, slot)
 
 
+def current_round(ctx: DraftContext) -> int:
+    return max(1, math.ceil(ctx.current_pick_no / max(1, ctx.teams)))
+
+
 def my_roster_counts(ctx: DraftContext) -> Counter:
     counts: Counter = Counter()
     for pick in ctx.picks:
@@ -134,6 +138,139 @@ def roster_need_score(ctx: DraftContext, position: str) -> float:
     if position in {"K", "DEF"} and ctx.current_pick_no < ctx.teams * (ctx.rounds - 2):
         return 0.25
     return 0.45
+
+
+def is_one_qb_ppr_redraft(ctx: DraftContext) -> bool:
+    settings = ctx.draft.get("settings", {})
+    qb_slots = int(settings.get("slots_qb", 1) or 0)
+    super_flex = int(settings.get("slots_super_flex", 0) or settings.get("slots_qb_flex", 0) or 0)
+    return qb_slots <= 1 and super_flex == 0 and "ppr" in ctx.scoring_type
+
+
+def roster_strategy_summary(ctx: DraftContext) -> dict[str, Any]:
+    settings = ctx.draft.get("settings", {})
+    counts = my_roster_counts(ctx)
+    rb_required = int(settings.get("slots_rb", 2) or 0)
+    wr_required = int(settings.get("slots_wr", 2) or 0)
+    te_required = int(settings.get("slots_te", 1) or 0)
+    qb_required = int(settings.get("slots_qb", 1) or 0)
+    flex = int(settings.get("slots_flex", 0) or settings.get("slots_wrrbte_flex", 0) or 0)
+    rb_wr_core = counts["RB"] + counts["WR"]
+    strategy_format = (
+        f"{ctx.teams}-team 1-QB PPR redraft strategy"
+        if is_one_qb_ppr_redraft(ctx)
+        else "league settings strategy"
+    )
+    return {
+        "format": strategy_format,
+        "round": current_round(ctx),
+        "rb_required": rb_required,
+        "wr_required": wr_required,
+        "te_required": te_required,
+        "qb_required": qb_required,
+        "flex": flex,
+        "current_roster_counts": dict(counts),
+        "rb_wr_core_count": rb_wr_core,
+        "rules": [
+            "Use ADP as market price, not as the ranking.",
+            "Recommend from projected points above replacement, tier drop, survival risk, roster fit, and ADP value.",
+            "In 1-QB PPR, wait on QB unless an elite tier falls below market price.",
+            "Prefer RB/WR anchors early; RB gets the coin-flip edge only when the value gap is real.",
+            "Draft into a positional run only when the current tier is about to disappear.",
+            "Use late rounds for contingent-upside RBs, target-earning WRs, and D/ST or kicker last.",
+        ],
+    }
+
+
+def draft_strategy_modifiers(
+    ctx: DraftContext,
+    position: str,
+    adp: float,
+    vbd: float,
+    scarcity: float,
+    survival: float,
+    roster_fit: float,
+) -> tuple[dict[str, float], list[str]]:
+    round_no = current_round(ctx)
+    counts = my_roster_counts(ctx)
+    settings = ctx.draft.get("settings", {})
+    rb_slots = int(settings.get("slots_rb", 2) or 0)
+    wr_slots = int(settings.get("slots_wr", 2) or 0)
+    flex = int(settings.get("slots_flex", 0) or settings.get("slots_wrrbte_flex", 0) or 0)
+    one_qb_ppr = is_one_qb_ppr_redraft(ctx)
+    adp_delta = ctx.current_pick_no - adp
+    is_reach = adp_delta < -ctx.teams
+    is_value = adp_delta > ctx.teams / 2
+    tier_breaker = scarcity >= 0.45 or survival <= 0.18
+
+    modifiers: dict[str, float] = {
+        "strategy_adp_value": clamp(adp_delta / max(1, ctx.teams), -1.25, 1.5) * 4,
+        "strategy_tier_drop": (scarcity * 0.25 + (1 - survival) * 0.15) * 20,
+    }
+    factors: list[str] = [
+        f"strategy formula: VOR + tier urgency + survival risk + roster fit + ADP value",
+    ]
+    if is_value:
+        factors.append("market value: available later than ADP")
+    if is_reach:
+        factors.append("ADP reach guardrail applied")
+    if tier_breaker:
+        factors.append("tier-breaker/survival trigger")
+
+    if one_qb_ppr:
+        rb_wr_core = counts["RB"] + counts["WR"]
+        rb_need = max(0, rb_slots - counts["RB"])
+        wr_need = max(0, wr_slots - counts["WR"])
+        starting_core_need = rb_need + wr_need + max(0, flex - max(0, rb_wr_core - rb_slots - wr_slots))
+
+        if position in {"RB", "WR"}:
+            if round_no <= 3 and rb_wr_core < 2:
+                modifiers["strategy_anchor_core"] = 7.0
+                factors.append("strategy: build two RB/WR anchors by Round 3")
+            elif round_no <= 6 and starting_core_need > 0:
+                modifiers["strategy_starting_core"] = 5.5
+                factors.append("strategy: complete RB/WR starting core before bench picks")
+            if position == "RB" and round_no <= 4 and counts["RB"] < 1 and vbd >= 20:
+                modifiers["strategy_rb_scarcity_coinflip"] = 4.5
+                factors.append("strategy: RB gets coin-flip edge only with a real VOR gap")
+            if position == "WR" and "ppr" in ctx.scoring_type and round_no >= 3:
+                modifiers["strategy_ppr_wr_depth"] = 2.0
+                factors.append("strategy: PPR target volume supports WR/flex depth")
+            if round_no >= 9 and position == "RB" and roster_fit >= 0.5:
+                modifiers["strategy_late_rb_upside"] = 4.0
+                factors.append("strategy: late RB contingent-upside portfolio")
+
+        if position == "QB":
+            elite_qb_value = adp <= 36 and is_value
+            if round_no <= 5 and not elite_qb_value:
+                modifiers["strategy_wait_on_qb"] = -9.0
+                factors.append("strategy: 1-QB PPR waits on QB unless elite value falls")
+            elif counts["QB"] == 0 and 7 <= round_no <= 10:
+                modifiers["strategy_qb_value_window"] = 4.5
+                factors.append("strategy: discounted starting-QB window")
+            if counts["QB"] >= 1:
+                modifiers["strategy_no_early_backup_qb"] = -12.0
+                factors.append("strategy: avoid backup QB before core depth is built")
+
+        if position == "TE":
+            elite_te_value = adp <= 36 and (is_value or tier_breaker)
+            if round_no <= 6 and elite_te_value and counts["TE"] == 0:
+                modifiers["strategy_elite_te_value"] = 4.0
+                factors.append("strategy: elite TE only when value/tier edge is real")
+            elif round_no <= 8 and counts["TE"] == 0 and not elite_te_value:
+                modifiers["strategy_te_patience"] = -2.5
+                factors.append("strategy: wait for next usable TE tier")
+            if counts["TE"] >= 1 and round_no < 12:
+                modifiers["strategy_no_early_backup_te"] = -8.0
+                factors.append("strategy: avoid early backup TE in single-TE format")
+
+        if position in {"K", "DEF"}:
+            final_round_window = max(1, ctx.rounds - 1)
+            if round_no < final_round_window:
+                modifiers["strategy_stream_k_def_late"] = -24.0
+                factors.append("strategy: stream D/ST and kicker; draft them last")
+
+    return modifiers, factors
 
 
 def normalize_adp(player: dict[str, Any], fallback: float) -> float:
@@ -462,6 +599,16 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
                 scarcity,
             )
             modifiers = live_draft_modifiers(vbd, roster_fit, scarcity, survive, run)
+            strategy_modifiers, strategy_factors = draft_strategy_modifiers(
+                ctx,
+                position,
+                adp,
+                vbd,
+                scarcity,
+                survive,
+                roster_fit,
+            )
+            modifiers.update(strategy_modifiers)
             raw_score = weighted_preseason_score(components) + sum(modifiers.values())
             factors = [
                 f"draft score gate: role {components['role']:.0f}, talent {components['talent']:.0f}, team {components['team_environment']:.0f}, ceiling {components['ceiling']:.0f}, schedule {components['schedule']:.0f}, risk {components['risk']:.0f}",
@@ -473,6 +620,7 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
                 factors.append("scarcity/tier pressure at position")
             if run > 0.3:
                 factors.append("recent positional run detected")
+            factors.extend(strategy_factors)
             factors.extend(role_history_factors)
             factors.extend(risk_factors)
             candidates.append(
