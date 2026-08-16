@@ -32,11 +32,11 @@ DRAFT_SCORE_WEIGHTS = {
     "risk": -0.05,
 }
 
-POSITION_FPG_CAPS = {
-    "QB": 24.0,
-    "RB": 22.0,
-    "WR": 22.0,
-    "TE": 17.0,
+POSITION_ABSOLUTE_FPG_CAPS = {
+    "QB": 25.2,
+    "RB": 23.0,
+    "WR": 23.5,
+    "TE": 18.5,
     "K": 10.0,
     "DEF": 10.0,
 }
@@ -103,10 +103,9 @@ def roster_need_score(ctx: DraftContext, position: str) -> float:
 
 def normalize_adp(player: dict[str, Any], fallback: float) -> float:
     candidates = [
-        player.get("fantasy_data_id"),
-        player.get("search_rank"),
         (player.get("metadata") or {}).get("adp"),
         player.get("adp"),
+        player.get("search_rank"),
     ]
     for value in candidates:
         try:
@@ -118,17 +117,38 @@ def normalize_adp(player: dict[str, Any], fallback: float) -> float:
     return fallback
 
 
-def estimate_points(position: str, adp: float, scoring_type: str) -> tuple[float, float, float]:
-    baseline = BASELINES[position]
-    scarcity_curve = {"QB": 0.45, "RB": 0.9, "WR": 0.78, "TE": 0.72, "K": 0.2, "DEF": 0.25}[position]
-    starter_pick_value = max(0.0, 260.0 - adp) * scarcity_curve
-    points = baseline["points"] + starter_pick_value
+def market_ppg_prior(position: str, adp: float, scoring_type: str) -> float:
+    rank = max(1.0, min(350.0, adp))
+    if position == "QB":
+        ppg = 25.0 - 0.58 * math.log(rank)
+    elif position == "RB":
+        ppg = 22.8 - 0.24 * (rank - 1) ** 0.78
+    elif position == "WR":
+        ppg = 23.0 - 0.21 * (rank - 1) ** 0.80
+    elif position == "TE":
+        ppg = 18.2 - 0.20 * (rank - 1) ** 0.82
+    elif position == "K":
+        ppg = 9.6 - 0.012 * rank
+    else:
+        ppg = 9.4 - 0.010 * rank
+
     scoring_key = "half_ppr" if "half" in scoring_type else "standard" if "standard" in scoring_type else "ppr"
-    points *= POSITION_MULTIPLIER_BY_SCORING[scoring_key].get(position, 1.0)
-    games = baseline["games"]
-    floor = points * (0.72 if position in {"RB", "WR", "TE"} else 0.78)
-    ceiling = points * (1.24 if position in {"RB", "WR", "TE"} else 1.14)
-    return points, points / games, ceiling - floor
+    if scoring_key == "half_ppr" and position in {"RB", "WR", "TE"}:
+        ppg *= 0.93
+    elif scoring_key == "standard" and position in {"WR", "TE"}:
+        ppg *= 0.82
+    elif scoring_key == "standard" and position == "RB":
+        ppg *= 0.90
+    floor_by_position = {"QB": 12.0, "RB": 5.0, "WR": 5.0, "TE": 3.5, "K": 5.0, "DEF": 4.5}
+    return clamp(ppg, floor_by_position[position], POSITION_ABSOLUTE_FPG_CAPS[position])
+
+
+def estimate_points(position: str, adp: float, scoring_type: str) -> tuple[float, float, float]:
+    fpg = market_ppg_prior(position, adp, scoring_type)
+    games = BASELINES[position]["games"]
+    points = fpg * games
+    volatility_rate = {"QB": 0.26, "RB": 0.48, "WR": 0.50, "TE": 0.46, "K": 0.24, "DEF": 0.30}[position]
+    return points, fpg, points * volatility_rate
 
 
 def parse_float(value: Any) -> float | None:
@@ -186,7 +206,7 @@ def estimate_player_points(
     scoring_type: str,
 ) -> tuple[float, float, float, list[str]]:
     points, fpg, volatility = estimate_points(position, adp, scoring_type)
-    max_fpg = POSITION_FPG_CAPS[position]
+    max_fpg = POSITION_ABSOLUTE_FPG_CAPS[position]
     if fpg > max_fpg:
         games = BASELINES[position]["games"]
         points = max_fpg * games
@@ -217,9 +237,13 @@ def component_scores(
 ) -> dict[str, float]:
     depth_order = parse_float(player.get("depth_chart_order"))
     years_exp = parse_float(player.get("years_exp"))
-    search_rank = parse_float(player.get("search_rank")) or adp
+    market_rank = adp
 
     role = opportunity * 100
+    if position == "QB" and market_rank <= 75:
+        role += 25
+    if position in {"RB", "WR", "TE"} and market_rank <= 36:
+        role += 12
     if depth_order == 1:
         role += 10
     elif depth_order == 2:
@@ -229,7 +253,7 @@ def component_scores(
     if position in {"RB", "WR", "TE"} and fpg >= 15:
         role += 4
 
-    talent = 100 - min(80, max(0, search_rank - 1) * 0.45)
+    talent = 100 - min(80, max(0, market_rank - 1) * 0.45)
     if years_exp is not None and years_exp <= 1:
         talent -= 10
     elif years_exp is not None and 2 <= years_exp <= 5:

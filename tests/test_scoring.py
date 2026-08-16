@@ -2,6 +2,8 @@ from fantasy_draft_analyst.models import DraftContext
 from fantasy_draft_analyst.scoring import (
     component_scores,
     estimate_player_points,
+    market_ppg_prior,
+    normalize_adp,
     score_candidates,
     weighted_preseason_score,
     survival_probability,
@@ -95,3 +97,42 @@ def test_component_scores_penalize_committee_role_even_with_good_rank():
     assert components["role"] < 75
     assert components["talent"] < 60
     assert round(components["schedule"], 2) == 55
+
+
+def test_normalize_adp_does_not_use_fantasy_data_id_as_rank():
+    player = {"fantasy_data_id": 18890, "search_rank": 18}
+    assert normalize_adp(player, 350) == 18
+
+
+def test_elite_market_qb_gets_strong_role_and_talent_prior():
+    player = {
+        "full_name": "Josh Allen",
+        "position": "QB",
+        "team": "BUF",
+        "search_rank": 18,
+        "years_exp": 8,
+        "active": True,
+    }
+    points, fpg, volatility, _ = estimate_player_points(player, "QB", 18, "ppr")
+    components = component_scores(
+        player,
+        "QB",
+        18,
+        points=points,
+        fpg=fpg,
+        floor=points - volatility / 2,
+        ceiling=points + volatility / 2,
+        risk=0.08,
+        opportunity=0.55,
+        team_context=0.65,
+        schedule_context=0.55,
+        scarcity=0.2,
+    )
+    assert components["role"] >= 80
+    assert components["talent"] >= 90
+
+
+def test_elite_rb_market_curve_is_not_flat():
+    ppgs = [market_ppg_prior("RB", rank, "ppr") for rank in [1, 2, 6, 12, 24]]
+    assert len(set(round(ppg, 2) for ppg in ppgs)) == len(ppgs)
+    assert ppgs == sorted(ppgs, reverse=True)
