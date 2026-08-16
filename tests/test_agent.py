@@ -1,5 +1,6 @@
-from fantasy_draft_analyst.agent import DraftAnalyst
+from fantasy_draft_analyst.agent import DraftAnalyst, enforce_available_recommendation
 from fantasy_draft_analyst.config import Settings
+from fantasy_draft_analyst.models import Candidate
 
 from .fixtures import sample_draft, sample_picks, sample_players
 
@@ -42,3 +43,36 @@ def test_recommend_returns_top_three_without_external_services(monkeypatch):
     assert len(result["top_3"]) == 3
     assert result["llm_recommendation"]["final_recommendation"]
     assert result["provider"] == "local"
+
+
+def test_enforce_available_recommendation_overrides_drafted_player():
+    candidates = [
+        Candidate(
+            player_id="8150",
+            name="Kyren Williams",
+            position="RB",
+            team="LAR",
+            age=26,
+            adp=25,
+            projected_season_points=300,
+            projected_fp_per_game=18,
+            floor=220,
+            ceiling=370,
+            vbd=50,
+            scarcity=0.5,
+            roster_fit=1,
+            survival_probability=0.05,
+            risk=0.1,
+            opportunity=0.8,
+            team_context=0.7,
+            schedule_context=0.6,
+            score=150,
+            major_factors=["RB value over replacement 50.0"],
+            source_quality=["test"],
+        )
+    ]
+    parsed = {"final_recommendation": "Bijan Robinson", "top_3": [{"player_id": "9509", "name": "Bijan Robinson"}]}
+    guarded = enforce_available_recommendation(parsed, candidates)
+    assert guarded["final_recommendation"].startswith("Kyren Williams")
+    assert guarded["availability_override"]
+    assert guarded["top_3"][0]["player_id"] == "8150"

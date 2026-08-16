@@ -152,6 +152,7 @@ class DraftAnalyst:
         ctx = self.build_context(manual_state_path)
         candidates = score_candidates(ctx)
         reasoning: ReasoningResult = choose_reasoning(self.settings, ctx, candidates)
+        reasoning_payload = enforce_available_recommendation(reasoning.parsed, candidates)
         return {
             "provider": reasoning.provider,
             "reasoning_error": reasoning.error,
@@ -164,9 +165,68 @@ class DraftAnalyst:
                 "scoring_type": ctx.scoring_type,
             },
             "top_3": [candidate.as_dict() for candidate in candidates[:3]],
-            "llm_recommendation": reasoning.parsed,
+            "llm_recommendation": reasoning_payload,
             "mcp_sources_used": sorted(ctx.mcp_data.keys()),
         }
+
+
+def enforce_available_recommendation(parsed: Any, candidates: list[Any]) -> Any:
+    if not candidates:
+        return parsed
+    if not isinstance(parsed, dict):
+        return parsed
+
+    available_by_id = {str(candidate.player_id): candidate for candidate in candidates}
+    available_by_name = {candidate.name.casefold(): candidate for candidate in candidates}
+    top_candidate = candidates[0]
+
+    final = parsed.get("final_recommendation")
+    final_text = str(final or "")
+    final_available = False
+    for candidate in candidates:
+        if str(candidate.player_id) == final_text or candidate.name.casefold() in final_text.casefold():
+            final_available = True
+            break
+
+    if final and not final_available:
+        parsed = dict(parsed)
+        parsed["availability_override"] = (
+            f"LLM final recommendation '{final}' was not in the live available-player set. "
+            f"Using top live candidate instead."
+        )
+        parsed["final_recommendation"] = f"{top_candidate.name} ({top_candidate.position}, {top_candidate.team or 'FA'})"
+
+    clean_top_3 = []
+    for item in parsed.get("top_3") or []:
+        if not isinstance(item, dict):
+            continue
+        player_id = str(item.get("player_id") or "")
+        name = str(item.get("name") or "").casefold()
+        if player_id in available_by_id or name in available_by_name:
+            clean_top_3.append(item)
+
+    if len(clean_top_3) < 3:
+        existing_ids = {str(item.get("player_id")) for item in clean_top_3 if isinstance(item, dict)}
+        for candidate in candidates:
+            if candidate.player_id in existing_ids:
+                continue
+            clean_top_3.append(
+                {
+                    "player_id": candidate.player_id,
+                    "name": candidate.name,
+                    "confidence": 0.75,
+                    "why": candidate.major_factors[:4],
+                    "risk": [factor for factor in candidate.major_factors if "risk" in factor or "flag" in factor]
+                    or ["no major availability risk in local data"],
+                }
+            )
+            if len(clean_top_3) == 3:
+                break
+
+    if clean_top_3:
+        parsed = dict(parsed)
+        parsed["top_3"] = clean_top_3
+    return parsed
 
 
 def format_recommendation(result: dict[str, Any]) -> str:
@@ -188,6 +248,8 @@ def format_recommendation(result: dict[str, Any]) -> str:
     if llm:
         lines.append("")
         lines.append(f"Final recommendation: {llm.get('final_recommendation')}")
+        if llm.get("availability_override"):
+            lines.append(f"Availability guard: {llm['availability_override']}")
         if llm.get("strategy_note"):
             lines.append(f"Strategy: {llm['strategy_note']}")
     if result.get("mcp_sources_used"):
