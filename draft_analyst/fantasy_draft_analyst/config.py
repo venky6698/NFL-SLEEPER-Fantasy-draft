@@ -42,12 +42,14 @@ class Settings:
     enable_vegas: bool = False
     analyst_host: str = "127.0.0.1"
     analyst_port: int = 8787
+    live_sync_interval_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv()
         slot = os.getenv("MY_DRAFT_SLOT")
         port = os.getenv("ANALYST_PORT")
+        sync_interval = os.getenv("LIVE_SYNC_INTERVAL_SECONDS")
         return cls(
             nfl_mcp_url=os.getenv("NFL_MCP_URL", cls.nfl_mcp_url),
             sleeper_draft_id=os.getenv("SLEEPER_DRAFT_ID") or None,
@@ -62,4 +64,5 @@ class Settings:
             enable_vegas=os.getenv("ENABLE_VEGAS", "false").lower() in {"1", "true", "yes", "on"},
             analyst_host=os.getenv("ANALYST_HOST", cls.analyst_host),
             analyst_port=int(port) if port else cls.analyst_port,
+            live_sync_interval_seconds=int(sync_interval) if sync_interval else cls.live_sync_interval_seconds,
         )

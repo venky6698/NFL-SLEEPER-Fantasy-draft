@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -19,6 +20,7 @@ class DraftContext:
     traded_picks: list[dict[str, Any]] = field(default_factory=list)
     mcp_data: dict[str, Any] = field(default_factory=dict)
     manual_notes: dict[str, Any] = field(default_factory=dict)
+    sync_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def teams(self) -> int:
@@ -41,6 +43,21 @@ class DraftContext:
     @property
     def picked_player_ids(self) -> set[str]:
         return {str(pick.get("player_id")) for pick in self.picks if pick.get("player_id")}
+
+    @property
+    def last_pick(self) -> dict[str, Any] | None:
+        return self.picks[-1] if self.picks else None
+
+    @property
+    def seconds_since_sync(self) -> float | None:
+        synced_at = self.sync_metadata.get("synced_at")
+        if not synced_at:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(synced_at).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
 
 
 @dataclass

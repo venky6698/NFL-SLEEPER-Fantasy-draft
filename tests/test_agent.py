@@ -76,3 +76,95 @@ def test_enforce_available_recommendation_overrides_drafted_player():
     assert guarded["final_recommendation"].startswith("Kyren Williams")
     assert guarded["availability_override"]
     assert guarded["top_3"][0]["player_id"] == "8150"
+
+
+def test_enforce_available_recommendation_normalizes_llm_list_response():
+    candidates = [
+        Candidate(
+            player_id="8150",
+            name="Kyren Williams",
+            position="RB",
+            team="LAR",
+            age=26,
+            adp=25,
+            projected_season_points=300,
+            projected_fp_per_game=18,
+            floor=220,
+            ceiling=370,
+            vbd=50,
+            scarcity=0.5,
+            roster_fit=1,
+            survival_probability=0.05,
+            risk=0.1,
+            opportunity=0.8,
+            team_context=0.7,
+            schedule_context=0.6,
+            score=150,
+            major_factors=["RB value over replacement 50.0"],
+            source_quality=["test"],
+        )
+    ]
+    guarded = enforce_available_recommendation([{"player_id": "8150", "name": "Kyren Williams"}], candidates)
+    assert guarded["final_recommendation"] == "Kyren Williams"
+    assert guarded["top_3"][0]["player_id"] == "8150"
+
+
+def test_enforce_available_recommendation_fills_missing_final():
+    candidates = [
+        Candidate(
+            player_id="8150",
+            name="Kyren Williams",
+            position="RB",
+            team="LAR",
+            age=26,
+            adp=25,
+            projected_season_points=300,
+            projected_fp_per_game=18,
+            floor=220,
+            ceiling=370,
+            vbd=50,
+            scarcity=0.5,
+            roster_fit=1,
+            survival_probability=0.05,
+            risk=0.1,
+            opportunity=0.8,
+            team_context=0.7,
+            schedule_context=0.6,
+            score=150,
+            major_factors=["RB value over replacement 50.0"],
+            source_quality=["test"],
+        )
+    ]
+    guarded = enforce_available_recommendation({"top_3": []}, candidates)
+    assert guarded["final_recommendation"].startswith("Kyren Williams")
+    assert "omitted" in guarded["availability_override"]
+
+
+def test_enforce_available_recommendation_expands_id_only_final():
+    candidates = [
+        Candidate(
+            player_id="8150",
+            name="Kyren Williams",
+            position="RB",
+            team="LAR",
+            age=26,
+            adp=25,
+            projected_season_points=300,
+            projected_fp_per_game=18,
+            floor=220,
+            ceiling=370,
+            vbd=50,
+            scarcity=0.5,
+            roster_fit=1,
+            survival_probability=0.05,
+            risk=0.1,
+            opportunity=0.8,
+            team_context=0.7,
+            schedule_context=0.6,
+            score=150,
+            major_factors=["RB value over replacement 50.0"],
+            source_quality=["test"],
+        )
+    ]
+    guarded = enforce_available_recommendation({"final_recommendation": "8150"}, candidates)
+    assert guarded["final_recommendation"] == "Kyren Williams (RB, LAR)"

@@ -78,8 +78,17 @@ API endpoints:
 
 ```text
 GET /api/health
+GET /api/state
 GET /api/recommend
 ```
+
+The browser UI keeps a local live draft board and refreshes Sleeper every minute by default. Change this cadence in `.env`:
+
+```text
+LIVE_SYNC_INTERVAL_SECONDS=60
+```
+
+Recommendations use that live snapshot and exclude all drafted player IDs before sending the candidate set to Abacus.
 
 ## 5. Mock-Draft Test
 

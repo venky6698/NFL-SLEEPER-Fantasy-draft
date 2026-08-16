@@ -13,6 +13,7 @@ The analyst reads your live Sleeper draft, gathers NFL/fantasy context through N
 - Uses Abacus RouteLLM as the primary reasoning layer through `ABACUS_API_KEY`.
 - Supports Ollama fallback without requiring new large model downloads.
 - Provides a CLI and a local browser UI/API.
+- Replicates the live draft board locally and auto-syncs drafted players every minute.
 - Supports manual JSON draft state fallback when direct Sleeper polling is not possible.
 
 ## Requirements
@@ -126,8 +127,11 @@ Endpoints:
 
 ```text
 GET /api/health
+GET /api/state
 GET /api/recommend
 ```
+
+The UI polls Sleeper every `LIVE_SYNC_INTERVAL_SECONDS` seconds, defaulting to 60. Every recommendation uses the live sync snapshot, excludes drafted player IDs before scoring, and tells the LLM the sync timestamp, sync age, last pick, current pick number, and hard unavailable-player list.
 
 ## Manual Draft-State Fallback
 

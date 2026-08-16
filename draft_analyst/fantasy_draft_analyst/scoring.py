@@ -142,6 +142,8 @@ def build_positional_available(ctx: DraftContext) -> dict[str, list[tuple[str, d
             continue
         if player.get("active") is False and pos != "DEF":
             continue
+        if pos in {"QB", "RB", "WR", "TE", "K"} and not (player.get("team") or player.get("team_abbr")):
+            continue
         name = player.get("full_name") or player.get("first_name") or player.get("last_name")
         if not name and pos != "DEF":
             continue

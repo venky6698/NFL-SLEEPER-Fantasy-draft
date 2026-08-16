@@ -13,6 +13,9 @@ SYSTEM_PROMPT = """You are an elite fantasy football draft analyst.
 Use the supplied live draft state and candidate metrics. Return compact JSON only.
 Do not invent injuries, coaching facts, odds, or schedule edges that are not in the input.
 Prefer explainable, risk-aware recommendations over name value.
+This is a live timed draft. Recommend only from the supplied candidates list.
+Never recommend a player whose id appears in drafted_player_ids.
+Treat sync_age_seconds and last_pick as critical context; stale or drafted players are invalid.
 """
 
 
@@ -28,6 +31,14 @@ def build_reasoning_payload(ctx: DraftContext, candidates: list[Candidate]) -> d
             "my_slot": ctx.my_slot,
             "scoring_type": ctx.scoring_type,
             "settings": ctx.draft.get("settings", {}),
+            "synced_at": ctx.sync_metadata.get("synced_at"),
+            "sync_age_seconds": ctx.seconds_since_sync,
+            "sync_source": ctx.sync_metadata.get("source"),
+            "sync_error": ctx.sync_metadata.get("sync_error"),
+            "drafted_player_count": len(ctx.picked_player_ids),
+            "drafted_player_ids": sorted(ctx.picked_player_ids),
+            "last_pick": ctx.sync_metadata.get("last_pick") or ctx.last_pick,
+            "time_pressure": "live draft; answer should be decisive and avoid slow speculative branches",
         },
         "recent_picks": ctx.picks[-24:],
         "my_roster_counts": dict(__import__("collections").Counter(

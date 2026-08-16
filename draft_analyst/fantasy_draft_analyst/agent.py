@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import Settings
 from .http_json import HttpError, request_json, url_join
+from .live_sync import LiveDraftSnapshot
 from .mcp_client import McpClient
 from .models import DraftContext
 from .reasoning import ReasoningResult, choose_reasoning
@@ -70,15 +71,24 @@ class DraftAnalyst:
                 return int(slot)
         raise ValueError("Set MY_DRAFT_SLOT or SLEEPER_USERNAME so your draft position can be inferred.")
 
-    def build_context(self, manual_state_path: str | None = None) -> DraftContext:
+    def build_context(
+        self,
+        manual_state_path: str | None = None,
+        live_snapshot: LiveDraftSnapshot | None = None,
+    ) -> DraftContext:
         manual_notes: dict[str, Any] = {}
         if manual_state_path:
             manual_notes = json.loads(Path(manual_state_path).read_text())
 
-        draft_id = str(manual_notes.get("draft_id") or self.discover_draft_id())
-        draft = manual_notes.get("draft") or self.sleeper.draft(draft_id)
-        picks = manual_notes.get("picks") or self.sleeper.draft_picks(draft_id)
-        players = manual_notes.get("players") or self.sleeper.players()
+        if manual_notes.get("draft_id"):
+            draft_id = str(manual_notes["draft_id"])
+        elif live_snapshot:
+            draft_id = str(live_snapshot.draft_id)
+        else:
+            draft_id = self.discover_draft_id()
+        draft = manual_notes.get("draft") or (live_snapshot.draft if live_snapshot else self.sleeper.draft(draft_id))
+        picks = manual_notes.get("picks") or (live_snapshot.picks if live_snapshot else self.sleeper.draft_picks(draft_id))
+        players = manual_notes.get("players") or (live_snapshot.players if live_snapshot else self.sleeper.players())
         my_slot = int(manual_notes.get("my_slot") or self.infer_my_slot(draft))
 
         league = None
@@ -108,6 +118,13 @@ class DraftAnalyst:
             users=users,
             traded_picks=traded_picks,
             manual_notes=manual_notes,
+            sync_metadata={
+                "source": "live_sync" if live_snapshot else "direct_fetch",
+                "synced_at": live_snapshot.synced_at if live_snapshot else None,
+                "sync_error": live_snapshot.error if live_snapshot else None,
+                "drafted_player_ids": sorted(str(pick.get("player_id")) for pick in picks if pick.get("player_id")),
+                "last_pick": (live_snapshot.board_rows()[-1] if live_snapshot and live_snapshot.picks else None),
+            },
         )
         ctx.mcp_data = self.collect_mcp_context(ctx)
         return ctx
@@ -148,8 +165,12 @@ class DraftAnalyst:
                 data[name] = value
         return data
 
-    def recommend(self, manual_state_path: str | None = None) -> dict[str, Any]:
-        ctx = self.build_context(manual_state_path)
+    def recommend(
+        self,
+        manual_state_path: str | None = None,
+        live_snapshot: LiveDraftSnapshot | None = None,
+    ) -> dict[str, Any]:
+        ctx = self.build_context(manual_state_path, live_snapshot)
         candidates = score_candidates(ctx)
         reasoning: ReasoningResult = choose_reasoning(self.settings, ctx, candidates)
         reasoning_payload = enforce_available_recommendation(reasoning.parsed, candidates)
@@ -163,6 +184,10 @@ class DraftAnalyst:
                 "my_slot": ctx.my_slot,
                 "teams": ctx.teams,
                 "scoring_type": ctx.scoring_type,
+                "synced_at": ctx.sync_metadata.get("synced_at"),
+                "sync_age_seconds": ctx.seconds_since_sync,
+                "drafted_player_count": len(ctx.picked_player_ids),
+                "last_pick": ctx.sync_metadata.get("last_pick"),
             },
             "top_3": [candidate.as_dict() for candidate in candidates[:3]],
             "llm_recommendation": reasoning_payload,
@@ -173,6 +198,12 @@ class DraftAnalyst:
 def enforce_available_recommendation(parsed: Any, candidates: list[Any]) -> Any:
     if not candidates:
         return parsed
+    if isinstance(parsed, list):
+        parsed = {
+            "top_3": [item for item in parsed if isinstance(item, dict)][:3],
+            "final_recommendation": parsed[0].get("name") if parsed and isinstance(parsed[0], dict) else None,
+            "strategy_note": "LLM returned a list; normalized to the expected recommendation object.",
+        }
     if not isinstance(parsed, dict):
         return parsed
 
@@ -188,7 +219,15 @@ def enforce_available_recommendation(parsed: Any, candidates: list[Any]) -> Any:
             final_available = True
             break
 
-    if final and not final_available:
+    if final_text in available_by_id:
+        candidate = available_by_id[final_text]
+        parsed = dict(parsed)
+        parsed["final_recommendation"] = f"{candidate.name} ({candidate.position}, {candidate.team or 'FA'})"
+    elif not final:
+        parsed = dict(parsed)
+        parsed["availability_override"] = "LLM omitted final_recommendation. Using top live candidate instead."
+        parsed["final_recommendation"] = f"{top_candidate.name} ({top_candidate.position}, {top_candidate.team or 'FA'})"
+    elif not final_available:
         parsed = dict(parsed)
         parsed["availability_override"] = (
             f"LLM final recommendation '{final}' was not in the live available-player set. "
