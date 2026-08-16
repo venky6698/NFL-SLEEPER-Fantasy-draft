@@ -41,6 +41,41 @@ POSITION_ABSOLUTE_FPG_CAPS = {
     "DEF": 10.0,
 }
 
+TEAM_ENVIRONMENT_PRIORS = {
+    "BUF": 88,
+    "BAL": 86,
+    "PHI": 86,
+    "DET": 85,
+    "CIN": 84,
+    "KC": 84,
+    "DAL": 82,
+    "HOU": 81,
+    "LAR": 81,
+    "MIA": 81,
+    "SF": 81,
+    "ATL": 79,
+    "GB": 79,
+    "LAC": 79,
+    "WAS": 79,
+    "CHI": 77,
+    "DEN": 77,
+    "IND": 77,
+    "JAX": 76,
+    "MIN": 76,
+    "SEA": 75,
+    "TB": 75,
+    "ARI": 73,
+    "LV": 72,
+    "NE": 72,
+    "NO": 71,
+    "PIT": 71,
+    "TEN": 70,
+    "CAR": 69,
+    "CLE": 69,
+    "NYG": 68,
+    "NYJ": 68,
+}
+
 
 def pick_number_for_slot(next_pick: int, teams: int, slot: int) -> int:
     round_no = math.ceil(next_pick / teams)
@@ -238,40 +273,52 @@ def component_scores(
     depth_order = parse_float(player.get("depth_chart_order"))
     years_exp = parse_float(player.get("years_exp"))
     market_rank = adp
+    team = str(player.get("team") or player.get("team_abbr") or "").upper()
 
-    role = opportunity * 100
+    role = 50 + opportunity * 16
+    role += max(0.0, 15 - 3.0 * math.log(max(1.0, market_rank)))
     if position == "QB" and market_rank <= 75:
-        role += 25
-    if position in {"RB", "WR", "TE"} and market_rank <= 36:
-        role += 12
-    if depth_order == 1:
-        role += 10
-    elif depth_order == 2:
-        role -= 8
-    elif depth_order and depth_order >= 3:
-        role -= 22
-    if position in {"RB", "WR", "TE"} and fpg >= 15:
         role += 4
+    if position == "QB" and market_rank <= 24:
+        role += 5
+    if position in {"RB", "WR", "TE"} and market_rank <= 36:
+        role += 3
+    if depth_order == 1:
+        role += 7
+    elif depth_order == 2:
+        role -= 12
+    elif depth_order and depth_order >= 3:
+        role -= 26
+    if position in {"RB", "WR", "TE"} and fpg >= 15:
+        role += min(4, (fpg - 15) * 0.8)
 
-    talent = 100 - min(80, max(0, market_rank - 1) * 0.45)
+    talent = 96 - min(58, 8.8 * math.log(max(1.0, market_rank)))
     if years_exp is not None and years_exp <= 1:
-        talent -= 10
+        talent -= 7
     elif years_exp is not None and 2 <= years_exp <= 5:
-        talent += 4
+        talent += 3
+    elif years_exp is not None and years_exp >= 9 and position in {"RB", "WR"}:
+        talent -= 6
     if fpg >= 18:
-        talent += 6
+        talent += min(5, (fpg - 18) * 1.2)
     elif fpg < 9 and position in {"RB", "WR", "TE"}:
         talent -= 6
 
-    team_environment = team_context * 100
-    if player.get("team") or player.get("team_abbr"):
-        team_environment += 6
+    team_environment = TEAM_ENVIRONMENT_PRIORS.get(team, 72 if team else 55)
+    team_environment = team_environment * 0.8 + team_context * 20
     if depth_order and depth_order > 1:
-        team_environment -= 4
+        team_environment -= 5
 
-    ceiling_score = 45 + min(45, max(0, ceiling - floor) / max(1, fpg) * 8)
-    if scarcity > 0.45:
+    max_fpg = POSITION_ABSOLUTE_FPG_CAPS[position]
+    ceiling_score = 45 + (fpg / max_fpg) * 24
+    ceiling_score += max(0.0, 10 - 1.8 * math.log(max(1.0, market_rank)))
+    ceiling_score += min(8, max(0, ceiling - floor) / max(1, points) * 12)
+    if market_rank <= 12:
         ceiling_score += 6
+    elif market_rank <= 36:
+        ceiling_score += 3
+    if scarcity > 0.45:
+        ceiling_score += 3
 
     return {
         "role": clamp(role),

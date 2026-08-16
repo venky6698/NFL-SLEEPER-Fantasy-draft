@@ -111,6 +111,7 @@ def test_elite_market_qb_gets_strong_role_and_talent_prior():
         "team": "BUF",
         "search_rank": 18,
         "years_exp": 8,
+        "depth_chart_order": 1,
         "active": True,
     }
     points, fpg, volatility, _ = estimate_player_points(player, "QB", 18, "ppr")
@@ -129,10 +130,38 @@ def test_elite_market_qb_gets_strong_role_and_talent_prior():
         scarcity=0.2,
     )
     assert components["role"] >= 80
-    assert components["talent"] >= 90
+    assert components["talent"] >= 70
 
 
 def test_elite_rb_market_curve_is_not_flat():
     ppgs = [market_ppg_prior("RB", rank, "ppr") for rank in [1, 2, 6, 12, 24]]
     assert len(set(round(ppg, 2) for ppg in ppgs)) == len(ppgs)
     assert ppgs == sorted(ppgs, reverse=True)
+
+
+def test_top_qb_components_are_not_flat():
+    rows = []
+    for name, team, rank in [("Josh Allen", "BUF", 4), ("Joe Burrow", "CIN", 14), ("Jalen Hurts", "PHI", 30)]:
+        player = {"full_name": name, "position": "QB", "team": team, "search_rank": rank, "depth_chart_order": 1, "years_exp": 6}
+        points, fpg, volatility, _ = estimate_player_points(player, "QB", rank, "ppr")
+        rows.append(component_scores(player, "QB", rank, points, fpg, points - volatility / 2, points + volatility / 2, 0.08, 0.55, 0.65, 0.55, 0.2))
+    assert len({round(row["role"], 2) for row in rows}) > 1
+    assert len({round(row["talent"], 2) for row in rows}) > 1
+    assert len({round(row["team_environment"], 2) for row in rows}) > 1
+
+
+def test_top_wr_te_components_are_not_flat():
+    players = [
+        {"full_name": "Ja'Marr Chase", "position": "WR", "team": "CIN", "search_rank": 3, "depth_chart_order": 1, "years_exp": 5},
+        {"full_name": "CeeDee Lamb", "position": "WR", "team": "DAL", "search_rank": 9, "depth_chart_order": 1, "years_exp": 6},
+        {"full_name": "Trey McBride", "position": "TE", "team": "ARI", "search_rank": 19, "depth_chart_order": 1, "years_exp": 4},
+        {"full_name": "Brock Bowers", "position": "TE", "team": "LV", "search_rank": 22, "depth_chart_order": 1, "years_exp": 2},
+    ]
+    rows = []
+    for player in players:
+        position = player["position"]
+        rank = player["search_rank"]
+        points, fpg, volatility, _ = estimate_player_points(player, position, rank, "ppr")
+        rows.append(component_scores(player, position, rank, points, fpg, points - volatility / 2, points + volatility / 2, 0.08, 0.7, 0.65, 0.55, 0.2))
+    assert len({round(row["role"], 2) for row in rows}) > 1
+    assert len({round(row["team_environment"], 2) for row in rows}) > 1
