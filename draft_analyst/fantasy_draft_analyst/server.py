@@ -180,6 +180,18 @@ def run_server(analyst: DraftAnalyst, host: str, port: int) -> None:
                     snapshot = live_sync.snapshot(force=True) if use_sync and not manual_state else None
                     self.send_json(analyst.recommend(manual_state, snapshot))
                     return
+                if parsed.path == "/api/top-weekly":
+                    params = parse_qs(parsed.query)
+                    positions = [
+                        position.strip().upper()
+                        for position in params.get("positions", ["QB,RB,WR,TE,K,DEF"])[0].split(",")
+                        if position.strip()
+                    ]
+                    limit = int(params.get("limit", ["30"])[0])
+                    season = int(params.get("season", ["2026"])[0])
+                    snapshot = live_sync.snapshot(force=True)
+                    self.send_json(analyst.position_report(positions=positions, limit=limit, season=season, live_snapshot=snapshot))
+                    return
                 self.send_json({"error": "not found"}, 404)
             except Exception as exc:
                 self.send_json({"error": str(exc)}, 500)

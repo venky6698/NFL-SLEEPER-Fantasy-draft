@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .agent import DraftAnalyst, format_recommendation
 from .config import Settings
 from .server import run_server
+from .weekly import markdown_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="Run local web UI/API.")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
+
+    top = sub.add_parser("top-weekly", help="Generate top players by position with weekly game projections.")
+    top.add_argument("--positions", default="QB,RB,WR,TE,K,DEF", help="Comma-separated positions.")
+    top.add_argument("--limit", type=int, default=30)
+    top.add_argument("--season", type=int, default=2026)
+    top.add_argument("--json-out", default="outputs/top_weekly.json")
+    top.add_argument("--md-out", default="outputs/top_weekly.md")
 
     args = parser.parse_args(argv)
     settings = Settings.from_env()
@@ -40,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "serve":
             run_server(analyst, host=args.host or settings.analyst_host, port=args.port or settings.analyst_port)
+            return 0
+        if args.command == "top-weekly":
+            positions = [position.strip().upper() for position in args.positions.split(",") if position.strip()]
+            report = analyst.position_report(positions=positions, limit=args.limit, season=args.season)
+            json_path = Path(args.json_out)
+            md_path = Path(args.md_out)
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(report, indent=2))
+            md_path.write_text(markdown_report(report))
+            print(f"Wrote {json_path}")
+            print(f"Wrote {md_path}")
             return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

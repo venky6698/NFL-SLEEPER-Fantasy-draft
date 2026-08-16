@@ -13,6 +13,7 @@ from .models import DraftContext
 from .reasoning import ReasoningResult, choose_reasoning
 from .scoring import score_candidates
 from .sleeper import SleeperClient
+from .weekly import top_by_position_with_weekly
 
 
 @dataclass
@@ -193,6 +194,27 @@ class DraftAnalyst:
             "llm_recommendation": reasoning_payload,
             "mcp_sources_used": sorted(ctx.mcp_data.keys()),
         }
+
+    def position_report(
+        self,
+        *,
+        positions: list[str] | None = None,
+        limit: int = 30,
+        season: int = 2026,
+        manual_state_path: str | None = None,
+        live_snapshot: LiveDraftSnapshot | None = None,
+    ) -> dict[str, Any]:
+        ctx = self.build_context(manual_state_path, live_snapshot)
+        candidates = score_candidates(ctx, limit_per_position=max(limit, 80))
+        report = top_by_position_with_weekly(candidates, self.mcp, positions=positions, limit=limit, season=season)
+        report["draft"] = {
+            "draft_id": ctx.draft.get("draft_id"),
+            "pick_no": ctx.current_pick_no,
+            "my_slot": ctx.my_slot,
+            "drafted_player_count": len(ctx.picked_player_ids),
+            "scoring_type": ctx.scoring_type,
+        }
+        return report
 
 
 def enforce_available_recommendation(parsed: Any, candidates: list[Any]) -> Any:
