@@ -83,6 +83,7 @@ class Candidate:
     score: float
     major_factors: list[str]
     source_quality: list[str]
+    draft_score_components: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -105,6 +106,9 @@ class Candidate:
             "team_context": round(self.team_context, 2),
             "schedule_context": round(self.schedule_context, 2),
             "score": round(self.score, 2),
+            "draft_score_components": {
+                key: round(value, 2) for key, value in self.draft_score_components.items()
+            },
             "major_factors": self.major_factors,
             "source_quality": self.source_quality,
         }

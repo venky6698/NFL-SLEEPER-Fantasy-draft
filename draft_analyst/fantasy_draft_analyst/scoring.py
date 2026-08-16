@@ -23,6 +23,24 @@ POSITION_MULTIPLIER_BY_SCORING = {
     "standard": {"RB": 1.08, "WR": 0.98, "TE": 0.98, "QB": 1.0, "K": 1.0, "DEF": 1.0},
 }
 
+DRAFT_SCORE_WEIGHTS = {
+    "role": 0.35,
+    "talent": 0.25,
+    "team_environment": 0.20,
+    "ceiling": 0.10,
+    "schedule": 0.05,
+    "risk": -0.05,
+}
+
+POSITION_FPG_CAPS = {
+    "QB": 24.0,
+    "RB": 22.0,
+    "WR": 22.0,
+    "TE": 17.0,
+    "K": 10.0,
+    "DEF": 10.0,
+}
+
 
 def pick_number_for_slot(next_pick: int, teams: int, slot: int) -> int:
     round_no = math.ceil(next_pick / teams)
@@ -120,6 +138,10 @@ def parse_float(value: Any) -> float | None:
         return None
 
 
+def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))
+
+
 def role_history_cap(position: str, player: dict[str, Any]) -> tuple[float | None, list[str]]:
     factors: list[str] = []
     years_exp = parse_float(player.get("years_exp"))
@@ -134,6 +156,12 @@ def role_history_cap(position: str, player: dict[str, Any]) -> tuple[float | Non
         if depth_order and depth_order >= 3:
             factors.append("RB depth-chart role cap")
             return 8.0, factors
+        if depth_order == 2:
+            factors.append("RB2 committee role cap")
+            if years_exp is not None and years_exp <= 1:
+                factors.append("limited last-two-year NFL production; committee RB cap")
+                return 10.8, factors
+            return 12.5, factors
         if years_exp is not None and years_exp <= 1 and (not depth_order or depth_order >= 2):
             factors.append("limited last-two-year NFL production; committee RB cap")
             return 10.8, factors
@@ -158,6 +186,12 @@ def estimate_player_points(
     scoring_type: str,
 ) -> tuple[float, float, float, list[str]]:
     points, fpg, volatility = estimate_points(position, adp, scoring_type)
+    max_fpg = POSITION_FPG_CAPS[position]
+    if fpg > max_fpg:
+        games = BASELINES[position]["games"]
+        points = max_fpg * games
+        fpg = max_fpg
+        volatility = min(volatility, points * 0.48)
     cap, factors = role_history_cap(position, player)
     if cap is not None and fpg > cap:
         games = BASELINES[position]["games"]
@@ -165,6 +199,84 @@ def estimate_player_points(
         fpg = cap
         volatility = min(volatility, points * 0.45)
     return points, fpg, volatility, factors
+
+
+def component_scores(
+    player: dict[str, Any],
+    position: str,
+    adp: float,
+    points: float,
+    fpg: float,
+    floor: float,
+    ceiling: float,
+    risk: float,
+    opportunity: float,
+    team_context: float,
+    schedule_context: float,
+    scarcity: float,
+) -> dict[str, float]:
+    depth_order = parse_float(player.get("depth_chart_order"))
+    years_exp = parse_float(player.get("years_exp"))
+    search_rank = parse_float(player.get("search_rank")) or adp
+
+    role = opportunity * 100
+    if depth_order == 1:
+        role += 10
+    elif depth_order == 2:
+        role -= 8
+    elif depth_order and depth_order >= 3:
+        role -= 22
+    if position in {"RB", "WR", "TE"} and fpg >= 15:
+        role += 4
+
+    talent = 100 - min(80, max(0, search_rank - 1) * 0.45)
+    if years_exp is not None and years_exp <= 1:
+        talent -= 10
+    elif years_exp is not None and 2 <= years_exp <= 5:
+        talent += 4
+    if fpg >= 18:
+        talent += 6
+    elif fpg < 9 and position in {"RB", "WR", "TE"}:
+        talent -= 6
+
+    team_environment = team_context * 100
+    if player.get("team") or player.get("team_abbr"):
+        team_environment += 6
+    if depth_order and depth_order > 1:
+        team_environment -= 4
+
+    ceiling_score = 45 + min(45, max(0, ceiling - floor) / max(1, fpg) * 8)
+    if scarcity > 0.45:
+        ceiling_score += 6
+
+    return {
+        "role": clamp(role),
+        "talent": clamp(talent),
+        "team_environment": clamp(team_environment),
+        "ceiling": clamp(ceiling_score),
+        "schedule": clamp(schedule_context * 100),
+        "risk": clamp(risk * 100),
+    }
+
+
+def weighted_preseason_score(components: dict[str, float]) -> float:
+    return sum(components[key] * weight for key, weight in DRAFT_SCORE_WEIGHTS.items())
+
+
+def live_draft_modifiers(
+    vbd: float,
+    roster_fit: float,
+    scarcity: float,
+    survival: float,
+    run: float,
+) -> dict[str, float]:
+    return {
+        "value_over_replacement": min(12.0, max(0.0, vbd) * 0.05),
+        "roster_fit": (roster_fit - 0.5) * 10,
+        "scarcity": scarcity * 8,
+        "survival_urgency": (1 - survival) * 7,
+        "positional_run": run * 4,
+    }
 
 
 def injury_risk(player: dict[str, Any]) -> tuple[float, list[str]]:
@@ -264,19 +376,24 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
             if player.get("team"):
                 team_context += 0.05
             schedule_context = 0.55
-            raw_score = (
-                vbd * 0.38
-                + points * 0.12
-                + scarcity * 35
-                + roster_fit * 28
-                + (1 - survive) * 18
-                + opportunity * 12
-                + team_context * 8
-                + schedule_context * 6
-                - risk * 35
-                - volatility * 0.03
+            components = component_scores(
+                player,
+                position,
+                adp,
+                points,
+                fpg,
+                max(0.0, points - volatility / 2),
+                points + volatility / 2,
+                risk,
+                min(1.0, opportunity),
+                min(1.0, team_context),
+                schedule_context,
+                scarcity,
             )
+            modifiers = live_draft_modifiers(vbd, roster_fit, scarcity, survive, run)
+            raw_score = weighted_preseason_score(components) + sum(modifiers.values())
             factors = [
+                f"draft score gate: role {components['role']:.0f}, talent {components['talent']:.0f}, team {components['team_environment']:.0f}, ceiling {components['ceiling']:.0f}, schedule {components['schedule']:.0f}, risk {components['risk']:.0f}",
                 f"{position} value over replacement {vbd:.1f}",
                 f"{survive:.0%} chance to survive to your next pick",
                 f"roster fit {roster_fit:.0%}",
@@ -310,6 +427,7 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
                     score=raw_score,
                     major_factors=factors,
                     source_quality=["Sleeper live draft", "Sleeper player pool", "local VBD/scarcity model"],
+                    draft_score_components={**components, **modifiers},
                 )
             )
     return sorted(candidates, key=lambda c: c.score, reverse=True)

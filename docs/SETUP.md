@@ -90,6 +90,22 @@ LIVE_SYNC_INTERVAL_SECONDS=60
 
 Recommendations use that live snapshot and exclude all drafted player IDs before sending the candidate set to Abacus.
 
+## Draft Score Gate
+
+The local scorer uses a preseason draft-board model before Abacus reasoning:
+
+```text
+Draft Score =
+0.35 Role
++ 0.25 Talent
++ 0.20 Team Environment
++ 0.10 Ceiling
++ 0.05 Schedule
+- 0.05 Risk
+```
+
+Live draft urgency then adds smaller modifiers for value over replacement, roster fit, scarcity, positional runs, and chance the player survives to your next pick. Depth-chart role caps prevent committee RBs and low-history players from being projected like full workhorses.
+
 ## 5. Mock-Draft Test
 
 Use a Sleeper mock draft ID in `.env`, then run:

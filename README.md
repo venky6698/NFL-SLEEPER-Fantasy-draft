@@ -10,6 +10,7 @@ The analyst reads your live Sleeper draft, gathers NFL/fantasy context through N
 - Reads league settings, draft slot, picks, rosters, available players, recent positional runs, and roster construction.
 - Uses NFL MCP tools for draft board data, injuries, strength of schedule, defense rankings, coaching context, draft picks, and league context when available.
 - Scores candidates using projected season points, fantasy points per game, floor/ceiling, value over replacement, positional scarcity, tier pressure, roster fit, injury risk, opportunity, team context, and probability the player survives to your next pick.
+- Applies a preseason draft-score gate: 35% role, 25% talent, 20% team environment, 10% ceiling, 5% schedule, and -5% risk. Schedule is a tiebreaker, not the main driver.
 - Uses Abacus RouteLLM as the primary reasoning layer through `ABACUS_API_KEY`.
 - Supports Ollama fallback without requiring new large model downloads.
 - Provides a CLI and a local browser UI/API.
