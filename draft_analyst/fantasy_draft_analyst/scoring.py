@@ -113,6 +113,60 @@ def estimate_points(position: str, adp: float, scoring_type: str) -> tuple[float
     return points, points / games, ceiling - floor
 
 
+def parse_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def role_history_cap(position: str, player: dict[str, Any]) -> tuple[float | None, list[str]]:
+    factors: list[str] = []
+    years_exp = parse_float(player.get("years_exp"))
+    depth_order = parse_float(player.get("depth_chart_order"))
+    if years_exp is None:
+        metadata = player.get("metadata") or {}
+        rookie_year = parse_float(metadata.get("rookie_year"))
+        if rookie_year and rookie_year >= 2024:
+            years_exp = 1
+
+    if position == "RB":
+        if depth_order and depth_order >= 3:
+            factors.append("RB depth-chart role cap")
+            return 8.0, factors
+        if years_exp is not None and years_exp <= 1 and (not depth_order or depth_order >= 2):
+            factors.append("limited last-two-year NFL production; committee RB cap")
+            return 10.8, factors
+        if years_exp is not None and years_exp <= 2 and depth_order and depth_order >= 2:
+            factors.append("limited last-two-year RB production")
+            return 11.5, factors
+    if position == "WR":
+        if years_exp is not None and years_exp <= 1 and depth_order and depth_order >= 3:
+            factors.append("limited last-two-year WR production")
+            return 8.5, factors
+    if position == "TE":
+        if years_exp is not None and years_exp <= 1 and depth_order and depth_order >= 2:
+            factors.append("limited last-two-year TE production")
+            return 7.5, factors
+    return None, factors
+
+
+def estimate_player_points(
+    player: dict[str, Any],
+    position: str,
+    adp: float,
+    scoring_type: str,
+) -> tuple[float, float, float, list[str]]:
+    points, fpg, volatility = estimate_points(position, adp, scoring_type)
+    cap, factors = role_history_cap(position, player)
+    if cap is not None and fpg > cap:
+        games = BASELINES[position]["games"]
+        points = cap * games
+        fpg = cap
+        volatility = min(volatility, points * 0.45)
+    return points, fpg, volatility, factors
+
+
 def injury_risk(player: dict[str, Any]) -> tuple[float, list[str]]:
     factors: list[str] = []
     status = str(player.get("injury_status") or player.get("status") or "").lower()
@@ -182,11 +236,17 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
     for position, rows in available.items():
         replacement_index = min(len(rows) - 1, BASELINES[position]["replacement_rank"])
         replacement_adp = rows[replacement_index][2] if rows else 300.0
-        replacement_points, _, _ = estimate_points(position, replacement_adp, ctx.scoring_type)
+        replacement_player = rows[replacement_index][1] if rows else {}
+        replacement_points, _, _, _ = estimate_player_points(
+            replacement_player,
+            position,
+            replacement_adp,
+            ctx.scoring_type,
+        )
         adps = [row[2] for row in rows[: max(limit_per_position, 30)]]
         tier_gap_cutoff = statistics.mean(adps) + statistics.pstdev(adps) if len(adps) > 2 else 999.0
         for player_id, player, adp in rows[:limit_per_position]:
-            points, fpg, volatility = estimate_points(position, adp, ctx.scoring_type)
+            points, fpg, volatility, role_history_factors = estimate_player_points(player, position, adp, ctx.scoring_type)
             vbd = max(0.0, points - replacement_points)
             risk, risk_factors = injury_risk(player)
             run = positional_run_pressure(ctx, position)
@@ -225,6 +285,7 @@ def score_candidates(ctx: DraftContext, limit_per_position: int = 18) -> list[Ca
                 factors.append("scarcity/tier pressure at position")
             if run > 0.3:
                 factors.append("recent positional run detected")
+            factors.extend(role_history_factors)
             factors.extend(risk_factors)
             candidates.append(
                 Candidate(
